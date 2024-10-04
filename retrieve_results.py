@@ -11,6 +11,9 @@ These are three traditional statistical models for information retrieval.
 import json
 import os
 import pyterrier as pt
+from bs4 import BeautifulSoup
+import ast
+import string
 
 class ResultRetriever:
     def __init__(self, model, queries_path, documents_path, outdir):
@@ -23,16 +26,48 @@ class ResultRetriever:
         self.index = None
 
     def load_data(self):
+        """
+        Load queries and documents from JSON files.
+        """
         with open(self.queries_path, 'r') as f:
             self.queries = json.load(f)
         with open(self.documents_path, 'r') as f:
             self.documents = json.load(f)
 
     def build_index(self):
+        """
+        Initialize PyTerrier and build an index from the documents.
+    
+        This method checks if PyTerrier is started, initializes it if not,
+        creates an indexer, and indexes the documents using the 'Text' field.
+        """
         if not pt.started():
             pt.init()
         indexer = pt.IterDictIndexer(self.outdir + "/index")
         self.index = indexer.index(self.documents, fields=['Text'])
+
+    def clean_string_html(self, html_str):
+        '''
+        Given a string with html tags, return a string without the html tags.
+        '''
+        soup = BeautifulSoup(html_str, 'html.parser')
+        return soup.get_text()
+
+    def get_tags_str(self, tags_str):
+        '''
+        Given an input string that represents a python list, 
+        return a string with just the tags separated by spaces.
+        '''
+        tags_list = ast.literal_eval(tags_str)
+
+        return ' '.join(tags_list)
+
+    def remove_punctuation(self, input_string):
+        '''
+        Remove punctuation from the input string and return an output string that is just words, spaces, and digits.
+        '''
+        return ''.join(char for char in input_string if char not in string.punctuation)
+
 
     def retrieve(self):
         '''
@@ -57,9 +92,14 @@ class ResultRetriever:
             query_id = query['Id']
             query_title = query['Title']
             query_body = query['Body']
-            query_body = clean_string_html(query_body)
+            query_body = self.clean_string_html(query_body)
+            query_tags = query['Tags']
+            query_tags = self.get_tags_str(query_tags)
 
-            query_text = query['Title'] + " " + query['Body']
+            # The query text will just be a concatenation of title, body and tags as an unbroken string.
+            query_text = f"{query_title} {query_body} {query_tags}"
+            query_text = self.remove_punctuation(query_text)
+
             res = retriever.search(query_text)
             for rank, row in enumerate(res.itertuples()):
                 results.append((query_id, "Q0", row.docno, rank + 1, row.score, self.model))
