@@ -31,8 +31,15 @@ class ResultRetriever:
         """
         with open(self.queries_path, 'r') as f:
             self.queries = json.load(f)
+        
+
         with open(self.documents_path, 'r') as f:
             self.documents = json.load(f)
+        
+        # This is to make sure that PyTerrier recognizes the documents for indexing
+        for d in self.documents:
+            d['docno'] = d.pop('Id')
+            d['body'] = d.pop('Text')
 
     def build_index(self):
         """
@@ -131,10 +138,10 @@ if __name__ == "__main__":
 
     # Arguments for the user
     parser = argparse.ArgumentParser(description="Retrieve results from documents based on queries.")
-    parser.add_argument('--model', required=True, help="The retrieval model to use (tf-idf, bim, bm25).")
-    parser.add_argument('--queries', required=True, help="Path to the queries JSON file.")
-    parser.add_argument('--documents', required=True, help="Path to the documents JSON file.")
-    parser.add_argument('--outdir', required=True, help="Directory to save the results.")
+    parser.add_argument('--model', default='tf-idf', help="The retrieval model to use (tf-idf, bim, bm25).")
+    parser.add_argument('--queries', default='data/in/topics_1.json', help="Path to the queries JSON file.")
+    parser.add_argument('--documents', default='data/in/Answers.json', help="Path to the documents JSON file.")
+    parser.add_argument('--outdir', default='data/out/results', help="Directory to save the results.")
 
     args = parser.parse_args()
 

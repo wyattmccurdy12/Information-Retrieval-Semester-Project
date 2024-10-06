@@ -1,3 +1,12 @@
+'''
+Wyatt McCurdy
+2024-10-4
+Information Retrieval Project Part 1
+evaluate_results.py
+
+This script evaluates results given by the ResultRetriever.
+'''
+
 import argparse
 import pytrec_eval
 import pandas as pd
@@ -5,6 +14,16 @@ import os
 import matplotlib.pyplot as plt
 
 def load_results(results_path):
+    """
+    Load TREC-formatted results from a file.
+
+    Args:
+        results_path (str): Path to the TREC-formatted results file.
+
+    Returns:
+        dict: A dictionary where keys are query IDs and values are dictionaries
+              mapping document IDs to their respective scores.
+    """
     results = {}
     with open(results_path, 'r') as f:
         for line in f:
@@ -15,6 +34,16 @@ def load_results(results_path):
     return results
 
 def load_qrels(qrels_path):
+    """
+    Load qrels from a file.
+
+    Args:
+        qrels_path (str): Path to the qrel file.
+
+    Returns:
+        dict: A dictionary where keys are query IDs and values are dictionaries
+              mapping document IDs to their respective relevance scores.
+    """
     qrels = {}
     with open(qrels_path, 'r') as f:
         for line in f:
@@ -25,11 +54,30 @@ def load_qrels(qrels_path):
     return qrels
 
 def evaluate_results(results, qrels):
+    """
+    Evaluate the results using pytrec_eval.
+
+    Args:
+        results (dict): A dictionary of results where keys are query IDs and values
+                        are dictionaries mapping document IDs to their respective scores.
+        qrels (dict): A dictionary of qrels where keys are query IDs and values
+                      are dictionaries mapping document IDs to their respective relevance scores.
+
+    Returns:
+        dict: A dictionary of evaluation metrics for each query.
+    """
     evaluator = pytrec_eval.RelevanceEvaluator(qrels, {'ndcg', 'P', 'map', 'bpref'})
     metrics = evaluator.evaluate(results)
     return metrics
 
 def generate_ski_jump_plot(metrics, outchartdir):
+    """
+    Generate a ski-jump plot of P@5 for the top 100 results.
+
+    Args:
+        metrics (dict): A dictionary of evaluation metrics for each query.
+        outchartdir (str): Directory to save the ski-jump plot.
+    """
     os.makedirs(outchartdir, exist_ok=True)
     p_at_5 = {query_id: metric['P_5'] for query_id, metric in metrics.items()}
     sorted_p_at_5 = sorted(p_at_5.items(), key=lambda x: x[1], reverse=True)
@@ -44,6 +92,12 @@ def generate_ski_jump_plot(metrics, outchartdir):
     plt.close()
 
 def main():
+    """
+    Main function to evaluate TREC-formatted results using PyTrecEval.
+
+    This function parses command-line arguments, loads the results and qrels,
+    evaluates the results, saves the evaluation metrics, and generates a ski-jump plot.
+    """
     parser = argparse.ArgumentParser(description="Evaluate TREC-formatted results using PyTrecEval.")
     parser.add_argument('--results', required=True, help="Path to the TREC-formatted results file.")
     parser.add_argument('--qrels', required=True, help="Path to the qrel file.")
