@@ -8,16 +8,20 @@ This script implements the ResultRetriever class, which allows a user to select 
 These are three traditional statistical models for information retrieval. 
 '''
 
-import json
 import os
 import pyterrier as pt
-from bs4 import BeautifulSoup
 import ast
 import string
 import shutil
 from tqdm import tqdm
 import argparse
+import re
+import pandas as pd
+import nltk
+from nltk.corpus import stopwords
 
+# Download NLTK stopwords if not already downloaded
+nltk.download('stopwords')
 
 class ResultRetriever:
     def __init__(self, model, queries_path, documents_path, outdir):
@@ -28,27 +32,31 @@ class ResultRetriever:
         self.queries = None
         self.documents = None
         self.index = None
+        self.stop_words = set(stopwords.words('english'))
 
     def load_data(self):
         """
-        Load queries and documents from JSON files.
+        Load queries and documents from JSON files into pandas DataFrames.
         """
-        with open(self.queries_path, 'r') as f:
-            self.queries = json.load(f)
-        
-        with open(self.documents_path, 'r') as f:
-            self.documents = json.load(f)
+        self.queries = pd.read_json(self.queries_path)
+        self.documents = pd.read_json(self.documents_path)
 
     def preprocess_documents(self):
         """
         Preprocess documents to ensure they have the required fields for indexing.
         """
-        for d in self.documents:
-            d['docno'] = d.pop('Id')
-            body = self.clean_string_html(d.pop('Text'))
-            body = self.remove_punctuation(body)
-            tags = self.get_tags_str(d.pop('Tags'))
-            d['body'] = f"{body} {tags}"
+        # Rename 'Id' column to 'docno' and stringify the 'docno' value
+        self.documents.rename(columns={'Id': 'docno'}, inplace=True)
+        self.documents['docno'] = self.documents['docno'].astype(str)
+
+        # Apply clean_string_html, remove_stopwords, remove_punctuation, and add_spaces_before_capitals to 'Text' column
+        self.documents['body'] = self.documents['Text'].apply(self.clean_string_html).apply(self.remove_stopwords).apply(self.remove_punctuation).apply(self.add_spaces_before_capitals)
+
+        # Drop 'Text' and 'Score' columns
+        self.documents.drop(columns=['Text', 'Score'], inplace=True)
+
+        # Remove rows where 'body' is empty
+        self.documents = self.documents[self.documents['body'].str.strip().astype(bool)]
 
     def build_index(self):
         """
@@ -75,21 +83,27 @@ class ResultRetriever:
         # Ensure the directory has read and write permissions
         os.chmod(index_dir, 0o755)
         print(f"Set read and write permissions for index directory: {index_dir}")
-            
-        indexer = pt.IterDictIndexer(index_dir)
+        
+        indexer = pt.DFIndexer(index_dir)
         print("Indexer created...")
 
-        # Use tqdm to create a progress bar for the indexing process
-        with tqdm(total=len(self.documents), desc="Indexing documents") as pbar:
-            self.index = indexer.index((doc for doc in self.documents), fields=['body'])
-            pbar.update(len(self.documents))
+        # Index the documents using the DataFrame directly
+        self.index = indexer.index(self.documents["body"], self.documents["docno"])
 
     def clean_string_html(self, html_str):
         '''
         Given a string with html tags, return a string without the html tags.
         '''
-        soup = BeautifulSoup(html_str, 'html.parser')
-        return soup.get_text()
+        clean_text = re.sub(r'<[^>]+>', '', html_str)
+        return clean_text
+
+    def remove_stopwords(self, text):
+        '''
+        Remove stopwords from the input text.
+        '''
+        words = text.split()
+        filtered_words = [word for word in words if word.lower() not in self.stop_words]
+        return ' '.join(filtered_words)
 
     def get_tags_str(self, tags_str):
         '''
@@ -103,7 +117,28 @@ class ResultRetriever:
         '''
         Remove punctuation from the input string and return an output string that is just words, spaces, and digits.
         '''
-        return ''.join(char for char in input_string if char not in string.punctuation)
+        translator = str.maketrans('', '', string.punctuation)
+        return input_string.translate(translator)
+
+    def add_spaces_before_capitals(self, text):
+        '''
+        Add spaces before capital letters in the input text.
+        '''
+        return re.sub(r'(?<!^)(?=[A-Z])', ' ', text)
+
+    def process_query(self, query):
+        query_id = query['Id']
+        query_title = query['Title']
+        query_body = self.clean_string_html(query['Body'])
+        query_tags = self.get_tags_str(query['Tags'])
+        
+        # The query text will just be a concatenation of title, body and tags as an unbroken string.
+        query_text = f"{query_title} {query_body} {query_tags}"
+        query_text = self.remove_stopwords(query_text)
+        query_text = self.remove_punctuation(query_text)
+        query_text = self.add_spaces_before_capitals(query_text)
+        
+        return query_id, query_text
 
     def retrieve(self):
         '''
@@ -121,20 +156,15 @@ class ResultRetriever:
         else:
             raise ValueError("Unsupported model: " + self.model)
 
+        # Apply the process_query function to each row in the queries DataFrame
+        processed_queries = self.queries.apply(self.process_query, axis=1)
+
+        # Extract query IDs and texts
+        query_ids = processed_queries.apply(lambda x: x[0])
+        query_texts = processed_queries.apply(lambda x: x[1])
+
         results = []
-        for query in self.queries:
-            # Get and clean id, title, and body.
-            query_id = query['Id']
-            query_title = query['Title']
-            query_body = query['Body']
-            query_body = self.clean_string_html(query_body)
-            query_tags = query['Tags']
-            query_tags = self.get_tags_str(query_tags)
-
-            # The query text will just be a concatenation of title, body and tags as an unbroken string.
-            query_text = f"{query_title} {query_body} {query_tags}"
-            query_text = self.remove_punctuation(query_text)
-
+        for query_id, query_text in zip(query_ids, query_texts):
             res = retriever.search(query_text)
             for rank, row in enumerate(res.itertuples()):
                 results.append((query_id, "Q0", row.docno, rank + 1, row.score, self.model))
