@@ -14,6 +14,10 @@ import pyterrier as pt
 from bs4 import BeautifulSoup
 import ast
 import string
+import shutil
+from tqdm import tqdm
+import argparse
+
 
 class ResultRetriever:
     def __init__(self, model, queries_path, documents_path, outdir):
@@ -32,26 +36,53 @@ class ResultRetriever:
         with open(self.queries_path, 'r') as f:
             self.queries = json.load(f)
         
-
         with open(self.documents_path, 'r') as f:
             self.documents = json.load(f)
-        
-        # This is to make sure that PyTerrier recognizes the documents for indexing
+
+    def preprocess_documents(self):
+        """
+        Preprocess documents to ensure they have the required fields for indexing.
+        """
         for d in self.documents:
             d['docno'] = d.pop('Id')
-            d['body'] = d.pop('Text')
+            body = self.clean_string_html(d.pop('Text'))
+            body = self.remove_punctuation(body)
+            tags = self.get_tags_str(d.pop('Tags'))
+            d['body'] = f"{body} {tags}"
 
     def build_index(self):
         """
         Initialize PyTerrier and build an index from the documents.
-    
+
         This method checks if PyTerrier is started, initializes it if not,
-        creates an indexer, and indexes the documents using the 'Text' field.
+        creates an indexer, and indexes the documents using the 'body' field.
+        If the index directory already exists, it is deleted and recreated.
         """
-        if not pt.started():
-            pt.init()
-        indexer = pt.IterDictIndexer(self.outdir + "/index")
-        self.index = indexer.index(self.documents, fields=['Text'])
+        if not pt.java.started():
+            pt.java.init()
+        
+        index_dir = "./index"
+        
+        # Delete the index directory if it already exists
+        if os.path.exists(index_dir):
+            shutil.rmtree(index_dir)
+            print(f"Deleted existing index directory: {index_dir}")
+
+        # Create the index directory
+        os.makedirs(index_dir, exist_ok=True)
+        print(f"Created index directory: {index_dir}")
+
+        # Ensure the directory has read and write permissions
+        os.chmod(index_dir, 0o755)
+        print(f"Set read and write permissions for index directory: {index_dir}")
+            
+        indexer = pt.IterDictIndexer(index_dir)
+        print("Indexer created...")
+
+        # Use tqdm to create a progress bar for the indexing process
+        with tqdm(total=len(self.documents), desc="Indexing documents") as pbar:
+            self.index = indexer.index((doc for doc in self.documents), fields=['body'])
+            pbar.update(len(self.documents))
 
     def clean_string_html(self, html_str):
         '''
@@ -66,7 +97,6 @@ class ResultRetriever:
         return a string with just the tags separated by spaces.
         '''
         tags_list = ast.literal_eval(tags_str)
-
         return ' '.join(tags_list)
 
     def remove_punctuation(self, input_string):
@@ -74,7 +104,6 @@ class ResultRetriever:
         Remove punctuation from the input string and return an output string that is just words, spaces, and digits.
         '''
         return ''.join(char for char in input_string if char not in string.punctuation)
-
 
     def retrieve(self):
         '''
@@ -84,17 +113,16 @@ class ResultRetriever:
             List of tuples each containing trec compliant results.
         '''
         if self.model == 'tf-idf':
-            retriever = pt.BatchRetrieve(self.index, wmodel="TF_IDF")
+            retriever = pt.terrier.Retriever(self.index, wmodel="TF_IDF")
         elif self.model == 'bim':
-            retriever = pt.BatchRetrieve(self.index, wmodel="BM25")
+            retriever = pt.terrier.Retriever(self.index, wmodel="BM25")
         elif self.model == 'bm25':
-            retriever = pt.BatchRetrieve(self.index, wmodel="BM25")
+            retriever = pt.terrier.Retriever(self.index, wmodel="BM25")
         else:
             raise ValueError("Unsupported model: " + self.model)
 
         results = []
         for query in self.queries:
-
             # Get and clean id, title, and body.
             query_id = query['Id']
             query_title = query['Title']
@@ -134,7 +162,6 @@ class ResultRetriever:
                 f.write("\t".join(map(str, result)) + "\n")
 
 if __name__ == "__main__":
-    import argparse
 
     # Arguments for the user
     parser = argparse.ArgumentParser(description="Retrieve results from documents based on queries.")
@@ -145,9 +172,10 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # Define the result retriever, load data, and write results
+    # Define the result retriever, load data, preprocess documents, build index, and write results
     retriever = ResultRetriever(args.model, args.queries, args.documents, args.outdir)
     retriever.load_data()
+    retriever.preprocess_documents()
     retriever.build_index()
     results = retriever.retrieve()
     retriever.save_results(results)
