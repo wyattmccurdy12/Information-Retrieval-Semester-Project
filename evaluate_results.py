@@ -17,6 +17,7 @@ import pytrec_eval
 import pandas as pd
 import os
 import matplotlib.pyplot as plt
+from pyterrier import Experiment
 
 def load_results(results_path):
     """
@@ -74,18 +75,8 @@ def evaluate_results(results, qrels):
     evaluator = pytrec_eval.RelevanceEvaluator(qrels, {'ndcg', 'P', 'map', 'bpref'})
     metrics = evaluator.evaluate(results)
 
-    # Calculate mean metrics
-    mean_metrics = {}
-    for query_id, metric in metrics.items():
-        for metric_name, value in metric.items():
-            if metric_name not in mean_metrics:
-                mean_metrics[metric_name] = []
-            mean_metrics[metric_name].append(value)
-
-    for metric_name in mean_metrics:
-        mean_metrics[metric_name] = sum(mean_metrics[metric_name]) / len(mean_metrics[metric_name])
-
-    return mean_metrics
+    mean_metrics_df = pd.DataFrame(metrics).T.mean()
+    return mean_metrics_df
 
 def generate_ski_jump_plot(metrics, outchartdir, model, version):
     """
@@ -97,9 +88,6 @@ def generate_ski_jump_plot(metrics, outchartdir, model, version):
         model (str): The model name.
         version (str): The version of the model.
     """
-    import os
-    import matplotlib.pyplot as plt
-
     os.makedirs(outchartdir, exist_ok=True)
     p_at_5 = {query_id: metric['P_5'] for query_id, metric in metrics.items()}
     sorted_p_at_5 = sorted(p_at_5.items(), key=lambda x: x[1], reverse=True)
@@ -114,6 +102,7 @@ def generate_ski_jump_plot(metrics, outchartdir, model, version):
     plt.savefig(os.path.join(outchartdir, f'ski_jump_plot_{model}_{version}.png'))
     plt.close()
 
+
 def main():
     """
     Main function to evaluate TREC-formatted results using PyTrecEval.
@@ -122,29 +111,37 @@ def main():
     evaluates the results, saves the evaluation metrics, and generates a ski-jump plot.
     """
     parser = argparse.ArgumentParser(description="Evaluate TREC-formatted results using PyTrecEval.")
-    parser.add_argument('--results', default="data/out/results/results_bim_1.tsv", help="Path to the TREC-formatted results file.")
+    parser.add_argument('--resultsdir', default="data/out/results", help="Path to the TREC-formatted results file.")
     parser.add_argument('--qrels', default="data/in/qrel_1.tsv", help="Path to the qrel file.")
     parser.add_argument('--outmetricsdir', default="metrics", help="Directory to save the evaluation metrics.")
     parser.add_argument('--outchartdir', default="figs", help="Directory to save the ski-jump plot.")
 
     args = parser.parse_args()
 
-    results = load_results(args.results)
-    qrels = load_qrels(args.qrels)
-    metrics = evaluate_results(results, qrels)
+    qrel_df = pd.read_csv(args.qrels, sep="\t", header=None)
+    qrel_df.columns = ["qid", "Q0", "docno", "label"]
+    topics_df = pd.read_json("data/in/topics_1.json")
+    topics_df.columns = ["qid", "query"]
 
-    # Get the name of the model and version
-    results_name = os.path.basename(args.results).split('.')[0]
-    model_name = results_name.split('_')[1]
-    version = results_name.split('_')[2]
+    # Get the name and version of the qrels file, so that we know which results we are comparing
+    qrel_name = os.path.basename(args.qrels)
+    qrel_version = qrel_name.split("_")[1].split(".")[0]
+    
+    results_dfs = []
+    # Load dataframes for each results file
+    for r in os.listdir(args.resultsdir):
+        if r.endswith(".tsv"): 
+            short_resultsname = r.split(".")[0]
+            if short_resultsname.endswith(str(qrel_version)):
+                results_dfs.append(pd.read_csv(os.path.join(args.resultsdir, r), sep="\t", header=None))
 
-    os.makedirs(args.outmetricsdir, exist_ok=True)
-    metrics_file = os.path.join(args.outmetricsdir, f'evaluation_metrics_{model_name}_{version}.txt')
-    with open(metrics_file, 'w') as f:
-        for metric_name, mean_value in metrics.items():
-            f.write(f"{metric_name}: {mean_value}\n")
+    # Now that we have dataframes, let's run pyterrier experiment
+    exp = Experiment(retr_systems=results_dfs, topics=topics_df,
+                     qrels=qrel_df, eval_metrics=["map", "P.1", "P.5", "P.10", "ndcg"])
 
-    generate_ski_jump_plot(metrics, args.outchartdir, model_name, version)
+    print()
+
+
 
 if __name__ == "__main__":
     main()

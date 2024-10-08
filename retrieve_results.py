@@ -84,11 +84,10 @@ class ResultRetriever:
         os.chmod(index_dir, 0o755)
         print(f"Set read and write permissions for index directory: {index_dir}")
         
-        indexer = pt.DFIndexer(index_dir)
-        print("Indexer created...")
+        indexer = pt.IterDictIndexer(index_dir, meta={'docno': 20, 'body': 4096})
 
         # Index the documents using the DataFrame directly
-        self.index = indexer.index(self.documents["body"], self.documents["docno"])
+        self.index = indexer.index(self.documents.to_dict(orient='records'))
 
     def clean_string_html(self, html_str):
         '''
@@ -97,13 +96,6 @@ class ResultRetriever:
         clean_text = re.sub(r'<[^>]+>', '', html_str)
         return clean_text
 
-    def remove_stopwords(self, text):
-        '''
-        Remove stopwords from the input text.
-        '''
-        words = text.split()
-        filtered_words = [word for word in words if word.lower() not in self.stop_words]
-        return ' '.join(filtered_words)
 
     def get_tags_str(self, tags_str):
         '''
@@ -207,5 +199,5 @@ if __name__ == "__main__":
     retriever.load_data()
     retriever.preprocess_documents()
     retriever.build_index()
-    results = retriever.retrieve()
-    retriever.save_results(results) 
+    print("Built index")
+
