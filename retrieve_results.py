@@ -202,10 +202,10 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # Define the result retriever, load data, preprocess documents, build index, and write results
+    # Define the result retriever, load data, preprocess documents, build index, and write results 
     retriever = ResultRetriever(args.model, args.queries, args.documents, args.outdir)
     retriever.load_data()
     retriever.preprocess_documents()
     retriever.build_index()
     results = retriever.retrieve()
-    retriever.save_results(results)
+    retriever.save_results(results) 
