@@ -1,3 +1,0 @@
-python evaluate_results.py --results data/out/results/results_bim_1.tsv --qrels data/in/qrel_1.tsv --outmetricsdir metrics --outchartdir figs
-python evaluate_results.py --results data/out/results/results_bm25_1.tsv --qrels data/in/qrel_1.tsv --outmetricsdir metrics --outchartdir figs
-python evaluate_results.py --results data/out/results/results_tf-idf_1.tsv --qrels data/in/qrel_1.tsv --outmetricsdir metrics --outchartdir figs
