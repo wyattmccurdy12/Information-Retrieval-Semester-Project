@@ -11,83 +11,127 @@ These are three traditional statistical models for information retrieval.
 import os
 import pyterrier as pt
 import ast
-import string
-import shutil
-from tqdm import tqdm
 import argparse
 import re
 import pandas as pd
-import nltk
-from nltk.corpus import stopwords
+import string
 
-# Download NLTK stopwords if not already downloaded
-nltk.download('stopwords')
 
 class ResultRetriever:
-    def __init__(self, model, queries_path, documents_path, outdir):
-        self.model = model
+    def __init__(self, queries_path, documents_path, qrels_path, outdir):
         self.queries_path = queries_path
         self.documents_path = documents_path
+        self.qrels_path = qrels_path
         self.outdir = outdir
         self.queries = None
         self.documents = None
+        self.qrels = None
         self.index = None
-        self.stop_words = set(stopwords.words('english'))
 
     def load_data(self):
         """
-        Load queries and documents from JSON files into pandas DataFrames.
+        Load queries, documents, and qrels from JSON files into pandas DataFrames.
         """
         self.queries = pd.read_json(self.queries_path)
         self.documents = pd.read_json(self.documents_path)
+        self.qrels = pd.read_csv(self.qrels_path, sep='\t', header=None)
+        self.qrels.columns = ['qid', 'q0', 'docno', 'relevance']
 
     def preprocess_documents(self):
         """
         Preprocess documents to ensure they have the required fields for indexing.
+
+        Clean the body field by removing html tags.
         """
         # Rename 'Id' column to 'docno' and stringify the 'docno' value
         self.documents.rename(columns={'Id': 'docno'}, inplace=True)
         self.documents['docno'] = self.documents['docno'].astype(str)
 
-        # Apply clean_string_html, remove_stopwords, remove_punctuation, and add_spaces_before_capitals to 'Text' column
-        self.documents['body'] = self.documents['Text'].apply(self.clean_string_html).apply(self.remove_stopwords).apply(self.remove_punctuation).apply(self.add_spaces_before_capitals)
+        # Apply clean_string_html
+        self.documents['text'] = self.documents['Text'].apply(self.clean_string_html)
 
         # Drop 'Text' and 'Score' columns
         self.documents.drop(columns=['Text', 'Score'], inplace=True)
 
-        # Remove rows where 'body' is empty
-        self.documents = self.documents[self.documents['body'].str.strip().astype(bool)]
+        # Print final columns and data types in the dataframe
+        print(f"Final columns in the documents dataframe: {self.documents.columns}")
+        print(f"Data types in the documents dataframe:\n{self.documents.dtypes}")
+
+    def preprocess_queries(self):
+        """
+        Preprocess queries to ensure they have the required fields for retrieval.
+    
+        Clean the body field by removing html tags and punctuation.
+        """
+        # Rename 'Id' column to 'qid' and stringify the 'qid' value
+        self.queries.rename(columns={'Id': 'qid'}, inplace=True)
+        self.queries['qid'] = self.queries['qid'].astype(str)
+    
+        # Apply clean_string_html
+        self.queries['query'] = self.queries['Body'].apply(self.clean_string_html)
+    
+        # Remove punctuation
+        self.queries['query'] = self.queries['query'].apply(self.remove_punctuation)
+    
+        # Drop 'Body' column
+        self.queries.drop(columns=['Body'], inplace=True)
+    
+        # Print final columns and data types in the dataframe
+        print(f"Final columns in the queries dataframe: {self.queries.columns}")
+        print(f"Data types in the queries dataframe:\n{self.queries.dtypes}")
+    
+    def remove_punctuation(self, text):
+        """
+        Remove punctuation from the given text.
+        """
+        return text.translate(str.maketrans('', '', string.punctuation))
+    
+    def preprocess_qrels(self):
+        """
+        Preprocess qrels to ensure they have the required fields for evaluation.
+        """
+        # Rename 'qid' column to 'qid' and stringify the 'qid' value
+        print("Initial columns in the qrels dataframe:")
+        print(self.qrels.columns)
+        print()
+
+        self.qrels['qid'] = self.qrels['qid'].astype(str)
+        self.qrels['docno'] = self.qrels['docno'].astype(str)
+
+        # Print final columns and data types in the dataframe
+        print(f"Final columns in the qrels dataframe: {self.qrels.columns}")
+        print(f"Data types in the qrels dataframe:\n{self.qrels.dtypes}")
 
     def build_index(self):
         """
-        Initialize PyTerrier and build an index from the documents.
+        Initialize PyTerrier and build an index from the documents if it doesn't exist.
+        Otherwise, load the existing index.
 
         This method checks if PyTerrier is started, initializes it if not,
-        creates an indexer, and indexes the documents using the 'body' field.
-        If the index directory already exists, it is deleted and recreated.
+        creates an indexer, and indexes the documents using the 'text' field.
+        If the index directory already exists, it is loaded instead of being recreated.
         """
         if not pt.java.started():
             pt.java.init()
         
         index_dir = "./index"
         
-        # Delete the index directory if it already exists
         if os.path.exists(index_dir):
-            shutil.rmtree(index_dir)
-            print(f"Deleted existing index directory: {index_dir}")
+            print(f"Loading existing index from: {index_dir}")
+            self.index = pt.IndexFactory.of(index_dir)
+        else:
+            print(f"Creating new index at: {index_dir}")
+            os.makedirs(index_dir, exist_ok=True)
+            print(f"Created index directory: {index_dir}")
 
-        # Create the index directory
-        os.makedirs(index_dir, exist_ok=True)
-        print(f"Created index directory: {index_dir}")
+            # Ensure the directory has read and write permissions
+            os.chmod(index_dir, 0o755)
+            print(f"Set read and write permissions for index directory: {index_dir}")
+            
+            indexer = pt.IterDictIndexer(index_dir, meta={'docno': 20, 'text': 4096}, stemmer='porter', stopwords='terrier')
 
-        # Ensure the directory has read and write permissions
-        os.chmod(index_dir, 0o755)
-        print(f"Set read and write permissions for index directory: {index_dir}")
-        
-        indexer = pt.IterDictIndexer(index_dir, meta={'docno': 20, 'body': 4096})
-
-        # Index the documents using the DataFrame directly
-        self.index = indexer.index(self.documents.to_dict(orient='records'))
+            # Index the documents using the DataFrame directly
+            self.index = indexer.index(self.documents.to_dict(orient='records'))
 
     def clean_string_html(self, html_str):
         '''
@@ -96,7 +140,6 @@ class ResultRetriever:
         clean_text = re.sub(r'<[^>]+>', '', html_str)
         return clean_text
 
-
     def get_tags_str(self, tags_str):
         '''
         Given an input string that represents a python list, 
@@ -104,19 +147,6 @@ class ResultRetriever:
         '''
         tags_list = ast.literal_eval(tags_str)
         return ' '.join(tags_list)
-
-    def remove_punctuation(self, input_string):
-        '''
-        Remove punctuation from the input string and return an output string that is just words, spaces, and digits.
-        '''
-        translator = str.maketrans('', '', string.punctuation)
-        return input_string.translate(translator)
-
-    def add_spaces_before_capitals(self, text):
-        '''
-        Add spaces before capital letters in the input text.
-        '''
-        return re.sub(r'(?<!^)(?=[A-Z])', ' ', text)
 
     def process_query(self, query):
         query_id = query['Id']
@@ -132,72 +162,51 @@ class ResultRetriever:
         
         return query_id, query_text
 
-    def retrieve(self):
-        '''
-        This is the retrieval function. Based on the user's choice, it calls the corresponding pyterrier model.
-
-        Returns: 
-            List of tuples each containing trec compliant results.
-        '''
-        if self.model == 'tf-idf':
-            retriever = pt.terrier.Retriever(self.index, wmodel="TF_IDF")
-        elif self.model == 'bim':
-            retriever = pt.terrier.Retriever(self.index, wmodel="BM25")
-        elif self.model == 'bm25':
-            retriever = pt.terrier.Retriever(self.index, wmodel="BM25")
-        else:
-            raise ValueError("Unsupported model: " + self.model)
-
-        # Apply the process_query function to each row in the queries DataFrame
-        processed_queries = self.queries.apply(self.process_query, axis=1)
-
-        # Extract query IDs and texts
-        query_ids = processed_queries.apply(lambda x: x[0])
-        query_texts = processed_queries.apply(lambda x: x[1])
-
-        results = []
-        for query_id, query_text in zip(query_ids, query_texts):
-            res = retriever.search(query_text)
-            for rank, row in enumerate(res.itertuples()):
-                results.append((query_id, "Q0", row.docno, rank + 1, row.score, self.model))
-        return results
-
-    def save_results(self, results):
-        '''
-        Save results from selected model. 
-
-        Args: 
-            results: a list of strings, one for each line of a trec-formatted tsv
-        '''
-        os.makedirs(self.outdir, exist_ok=True)
-
-        # Get topic number 
-        topic_num_str = os.path.basename(self.queries_path)
-        topic_num_str = topic_num_str.split("_")[1]
-        topic_num_str = topic_num_str.split(".")[0]
-
-        output_file = os.path.join(self.outdir, f"results_{self.model}_{topic_num_str}.tsv")
-
-        # Open output file and write results
-        with open(output_file, 'w') as f:
-            for result in results:
-                f.write("\t".join(map(str, result)) + "\n")
-
 if __name__ == "__main__":
 
     # Arguments for the user
     parser = argparse.ArgumentParser(description="Retrieve results from documents based on queries.")
-    parser.add_argument('--model', default='tf-idf', help="The retrieval model to use (tf-idf, bim, bm25).")
+
     parser.add_argument('--queries', default='data/in/topics_1.json', help="Path to the queries JSON file.")
     parser.add_argument('--documents', default='data/in/Answers.json', help="Path to the documents JSON file.")
+    parser.add_argument('--qrels', default='data/in/qrel_1.tsv')
     parser.add_argument('--outdir', default='data/out/results', help="Directory to save the results.")
 
     args = parser.parse_args()
 
     # Define the result retriever, load data, preprocess documents, build index, and write results 
-    retriever = ResultRetriever(args.model, args.queries, args.documents, args.outdir)
-    retriever.load_data()
-    retriever.preprocess_documents()
-    retriever.build_index()
-    print("Built index")
+    rr = ResultRetriever(args.queries, args.documents, args.qrels, args.outdir)
+    rr.load_data()
+    print("Loaded data")
+    rr.preprocess_documents()
+    print()
+    print("Preprocessed documents")
+    print()
+    rr.preprocess_queries()
+    print()
+    print("Preprocessed queries")
+    print()
+    rr.preprocess_qrels()
+    print()
+    print("Preprocessed qrels")
+    print()
+    rr.build_index()
+    print()
+    print("Built or loaded index")
+    print()
 
+    # After building the index, we enter a new phase - retrieval.
+    tf_idf = pt.terrier.Retriever(rr.index, wmodel='TF_IDF')
+    bm25 = pt.terrier.Retriever(rr.index, wmodel='BM25')
+    # bim = pt.terrier.Retriever(rr.index, wmodel='BIM')
+
+    print("Running experiment...")
+    pt.Experiment(
+        [tf_idf, bm25], 
+        rr.queries, 
+        rr.qrels, 
+        eval_metrics=["map", "ndcg", "recip_rank", "ndcg_cut_5", "ndcg_cut_10", "P.5", "P.10", "P.1000", "bpref"],
+        save_dir=args.outdir, 
+        verbose=True, 
+        save_mode='reuse'
+    )
