@@ -50,19 +50,29 @@ class ResultRetriever:
         # Apply clean_string_html
         self.documents['text'] = self.documents['Text'].apply(self.clean_string_html)
 
+        # Remove punctuation
+        self.documents['text'] = self.documents['text'].apply(self.remove_punctuation)
+
         # Drop 'Text' and 'Score' columns
         self.documents.drop(columns=['Text', 'Score'], inplace=True)
 
-        # Print final columns and data types in the dataframe
-        print(f"Final columns in the documents dataframe: {self.documents.columns}")
-        print(f"Data types in the documents dataframe:\n{self.documents.dtypes}")
+        # Save 100 rows of the dataframe to a tsv file
+        self.documents.head(100).to_csv('sample_docs.tsv', sep='\t', index=False)
 
     def preprocess_queries(self):
         """
         Preprocess queries to ensure they have the required fields for retrieval.
     
         Clean the body field by removing html tags and punctuation.
+        Clean the title field by removing punctuation.
+        Clean the tags field by literally evaluating the stringified list and joining the tags.
         """
+        # Preprocess title
+        self.queries['Title'] = self.queries['Title'].apply(self.remove_punctuation)
+
+        # Preprocess tags
+        self.queries['Tags'] = self.queries['Tags'].apply(self.get_tags_str)
+
         # Rename 'Id' column to 'qid' and stringify the 'qid' value
         self.queries.rename(columns={'Id': 'qid'}, inplace=True)
         self.queries['qid'] = self.queries['qid'].astype(str)
@@ -72,36 +82,31 @@ class ResultRetriever:
     
         # Remove punctuation
         self.queries['query'] = self.queries['query'].apply(self.remove_punctuation)
+
+        # Add title and tags to the query text
+        self.queries['query'] = self.queries['Title'] + ' '  + self.queries['query'] + ' '  + self.queries['Tags']
     
         # Drop 'Body' column
         self.queries.drop(columns=['Body'], inplace=True)
     
-        # Print final columns and data types in the dataframe
-        print(f"Final columns in the queries dataframe: {self.queries.columns}")
-        print(f"Data types in the queries dataframe:\n{self.queries.dtypes}")
-    
-    def remove_punctuation(self, text):
-        """
-        Remove punctuation from the given text.
-        """
-        return text.translate(str.maketrans('', '', string.punctuation))
+        # Save 100 rows of the dataframe to a tsv file
+        self.queries.head(100).to_csv('sample_queries.tsv', sep='\t', index=False)
     
     def preprocess_qrels(self):
         """
         Preprocess qrels to ensure they have the required fields for evaluation.
         """
-        # Rename 'qid' column to 'qid' and stringify the 'qid' value
-        print("Initial columns in the qrels dataframe:")
-        print(self.qrels.columns)
-        print()
 
         self.qrels['qid'] = self.qrels['qid'].astype(str)
         self.qrels['docno'] = self.qrels['docno'].astype(str)
 
-        # Print final columns and data types in the dataframe
-        print(f"Final columns in the qrels dataframe: {self.qrels.columns}")
-        print(f"Data types in the qrels dataframe:\n{self.qrels.dtypes}")
-
+    def remove_punctuation(self, text):
+        """
+        Replace punctuation in the given text with spaces.
+        """
+        translation_table = str.maketrans(string.punctuation, ' ' * len(string.punctuation))
+        return text.translate(translation_table)
+    
     def build_index(self):
         """
         Initialize PyTerrier and build an index from the documents if it doesn't exist.
@@ -162,6 +167,7 @@ class ResultRetriever:
         
         return query_id, query_text
 
+
 if __name__ == "__main__":
 
     # Arguments for the user
@@ -198,15 +204,28 @@ if __name__ == "__main__":
     # After building the index, we enter a new phase - retrieval.
     tf_idf = pt.terrier.Retriever(rr.index, wmodel='TF_IDF')
     bm25 = pt.terrier.Retriever(rr.index, wmodel='BM25')
-    # bim = pt.terrier.Retriever(rr.index, wmodel='BIM')
 
     print("Running experiment...")
-    pt.Experiment(
+    exp_sig = pt.Experiment(
         [tf_idf, bm25], 
         rr.queries, 
         rr.qrels, 
         eval_metrics=["map", "ndcg", "recip_rank", "ndcg_cut_5", "ndcg_cut_10", "P.5", "P.10", "P.1000", "bpref"],
         save_dir=args.outdir, 
         verbose=True, 
-        save_mode='reuse'
+        baseline=0
     )
+
+    exp_full = pt.Experiment(
+        [tf_idf, bm25],
+        rr.queries,
+        rr.qrels,
+        eval_metrics=["map", "ndcg", "recip_rank", "ndcg_cut_5", "ndcg_cut_10", "P.5", "P.10", "P.1000", "bpref"],
+        save_dir='data/out/results/full', 
+        verbose=True, 
+        perquery=True
+    )
+
+    # Save the results dataframe to a CSV file
+    exp_sig.to_csv('sig_results.csv')
+    exp_full.to_csv('full_results.csv')
